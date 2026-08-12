@@ -81,5 +81,9 @@ def list_commits(
     return json.dumps([c.__dict__ for c in commits], indent=2)
 
 
-if __name__ == "__main__":
+def main() -> None:
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

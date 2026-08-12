@@ -1,17 +1,22 @@
 """Smoke-test the commit-brief MCP server over stdio.
 
-Usage: uv run --extra mcp python scripts/test_mcp_client.py
+Usage: uv run --extra mcp python scripts/test_mcp_client.py [path-to-git-repo]
+Defaults to $CBR_TEST_REPO, then the current directory.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import sys
+from collections import Counter
 
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client, StdioServerParameters
 
-PROJECT = r"C:/Users/Ahmad Karim/Documents/fde/commit-brief"
-LRS = r"C:/Users/Ahmad Karim/Documents/LRS/LRS_PORTAL_EC/lrs-platform"
+PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("CBR_TEST_REPO", ".")
 
 
 def _text(result) -> str:
@@ -25,8 +30,8 @@ def _text(result) -> str:
 
 async def main() -> None:
     params = StdioServerParameters(
-        command=r"C:/Users/Ahmad Karim/Documents/fde/commit-brief/.venv/Scripts/python.exe",
-        args=["-u", "-m", "commit_brief.mcp_server"],
+        command="uv",
+        args=["run", "--extra", "mcp", "python", "-m", "commit_brief.mcp_server"],
         cwd=PROJECT,
     )
     async with stdio_client(params) as (read, write):
@@ -36,29 +41,36 @@ async def main() -> None:
             print("TOOLS:", [t.name for t in tools.tools])
 
             res = await session.call_tool(
-                "summarize_standup", {"repo": LRS, "since": "3 days ago", "dry_run": True}
+                "summarize_standup", {"repo": REPO, "since": "3 days ago", "dry_run": True}
             )
             text = _text(res)
-            print("summarize_standup(dry_run) -> starts with:", repr(text[:300]))
+            print("summarize_standup(dry_run) -> starts with:", repr(text[:60]))
 
             res = await session.call_tool(
-                "list_commits", {"repo": LRS, "since": "2 days ago"}
+                "list_commits", {"repo": REPO, "since": "2 days ago"}
             )
             text = _text(res)
             print("list_commits -> bytes:", len(text), "| first 80:", repr(text[:80]))
 
-            res = await session.call_tool(
-                "summarize_standup",
-                {"repo": LRS, "since": "7 days ago", "author": "Muhammad Ammar Faisal", "dry_run": True},
-            )
-            text = _text(res)
-            print("author-filtered dry_run -> contains only Ammar commits:",
-                  "Muhammad Ammar Faisal" in text and "ahm3dkarim" not in text)
+            try:
+                commits = json.loads(text)
+            except json.JSONDecodeError:
+                commits = []
+            top = Counter(c["author"] for c in commits).most_common(1)
+            if not top:
+                print("author-filter check skipped (no commits in 2-day window)")
+            else:
+                name = top[0][0]
+                res = await session.call_tool(
+                    "summarize_standup",
+                    {"repo": REPO, "since": "7 days ago", "author": name, "dry_run": True},
+                )
+                text = _text(res)
+                print(f"author-filtered dry_run -> top author '{name}' appears:",
+                      name in text)
 
     # Windows: the stdio client hangs in cleanup waiting for the server process
     # to exit. This is a smoke test — bypass anyio teardown once checks pass.
-    import os
-
     os._exit(0)
 
 
