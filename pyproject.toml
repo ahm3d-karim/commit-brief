@@ -1,0 +1,24 @@
+[project]
+name = "commit-brief"
+version = "0.1.0"
+description = "Turn yesterday's git log into a one-paragraph standup summary"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40",
+]
+
+[project.scripts]
+commit-brief = "commit_brief.cli:main"
+
+[project.optional-dependencies]
+# Pinned <2: mcp 2.x replaced FastMCP with a new MCPServer API. The protocol
+# served over stdio is identical, so staying on 1.x keeps the server code simple.
+mcp = ["mcp>=1.2,<2"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
