@@ -10,7 +10,6 @@ dependencies = [
 
 [project.scripts]
 commit-brief = "commit_brief.cli:main"
-commit-brief-mcp = "commit_brief.mcp_server:main"
 
 [project.optional-dependencies]
 # Pinned <2: mcp 2.x replaced FastMCP with a new MCPServer API. The protocol
