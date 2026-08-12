@@ -102,6 +102,17 @@ commit-brief mcp-test /path/to/repo
 - **`mcp` is pinned `<2`** because 2.x replaced FastMCP with a new API; the
   stdio protocol is identical, so 1.x keeps the server code simple.
 
+## Testing
+
+```bash
+uv run --extra test pytest       # core + CLI suite (unit tests, no API needed)
+commit-brief mcp-test            # end-to-end MCP smoke test (spawns the server)
+```
+
+CI runs the pytest suite on every push (GitHub Actions, `.github/workflows/ci.yml`).
+The MCP smoke test is intentionally excluded from pytest — it spawns servers
+and exits the process — so it stays a self-serve command.
+
 ## Project layout
 
 ```

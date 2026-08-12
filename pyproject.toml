@@ -15,6 +15,10 @@ commit-brief = "commit_brief.cli:main"
 # Pinned <2: mcp 2.x replaced FastMCP with a new MCPServer API. The protocol
 # served over stdio is identical, so staying on 1.x keeps the server code simple.
 mcp = ["mcp>=1.2,<2"]
+test = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [build-system]
 requires = ["hatchling"]
