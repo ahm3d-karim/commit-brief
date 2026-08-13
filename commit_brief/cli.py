@@ -6,8 +6,210 @@ import argparse
 import json
 import os
 import sys
+import time
+from pathlib import Path
 
-from .core import DEFAULT_MODEL, collect_commits, summarize
+from .core import DEFAULT_MODEL, collect_commits, find_repo, summarize
+
+# --------------------------------------------------------------------------
+# terminal styling — zero-dep ANSI; inert when piped or NO_COLOR
+# (pattern copied from the agentize CLI)
+# --------------------------------------------------------------------------
+
+
+def color_enabled() -> bool:
+    if os.environ.get("NO_COLOR"):
+        return False
+    return sys.stdout.isatty()
+
+
+def _enable_windows_vt() -> None:
+    """Windows: enable ANSI processing on the console — the colorama.init()
+    equivalent, zero deps. `os.system('')` is the classic toggle; the ctypes
+    branch (kernel32 console mode) covers consoles the toggle misses, e.g.
+    raw \x1b leakage on Python 3.11 cmd.exe."""
+    if os.name != "nt":
+        return
+    try:
+        os.system("")
+    except Exception:
+        pass
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.windll.kernel32
+        for stream, std in ((sys.stdout, -11), (sys.stderr, -12)):
+            handle = k32.GetStdHandle(std)
+            mode = wintypes.DWORD()
+            if handle not in (0, None) and handle != wintypes.HANDLE(-1).value \
+                    and k32.GetConsoleMode(handle, ctypes.byref(mode)):
+                # ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+                k32.SetConsoleMode(handle, mode.value | 0x0004)
+    except Exception:
+        pass  # piped/redirected streams: color_enabled() already falls back
+
+
+_enable_windows_vt()
+
+
+def _s(code: str, s: str) -> str:
+    return f"\x1b[{code}m{s}\x1b[0m" if color_enabled() else s
+
+
+def ok(s: str) -> str:
+    return _s("32", "✓ " + s)
+
+
+def warn(s: str) -> str:
+    return _s("33", "⚠ " + s)
+
+
+def err(s: str) -> str:
+    return _s("31", "✗ " + s)
+
+
+def green(s: str) -> str:
+    return _s("32", s)
+
+
+def cyan(s: str) -> str:
+    return _s("36", s)
+
+
+def dim(s: str) -> str:
+    return _s("2", s)
+
+
+def bold(s: str) -> str:
+    return _s("1", s)
+
+
+# --------------------------------------------------------------------------
+# repo tree walk — downward, depth <= 3 (unlike core.find_repo, which
+# walks UP from cwd like git itself)
+# --------------------------------------------------------------------------
+
+PRUNE_DIRS = {
+    ".git", "node_modules", ".next", ".nuxt", "dist", "build", "out",
+    ".venv", "venv", "env", "__pycache__", ".cache", ".turbo", ".parcel-cache",
+    "target", "coverage", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    ".tox", ".eggs", ".idea", ".vscode", ".yarn", ".pnpm-store", ".serverless",
+    ".vercel", ".expo", ".terraform", ".gitlab", "site-packages", ".docusaurus",
+    ".storybook-static", "cdk.out", "AppData", ".hermes", ".local",
+}
+
+
+def _same_path(a: Path, b: Path) -> bool:
+    if os.name == "nt":
+        return str(a).lower() == str(b).lower()
+    return a == b
+
+
+def find_repos_in_tree(base: Path) -> list[Path]:
+    """Git repos under `base`, depth <= 3. cwd is always first (and listed
+    once even when cwd itself is a repo — no duplicates)."""
+    base = base.resolve()
+    found: list[Path] = [base]
+    for dirpath, dirnames, _ in os.walk(base):
+        depth = dirpath[len(str(base)):].count(os.sep)
+        # .git must be detected BEFORE pruning (it's in PRUNE_DIRS);
+        # never descend into .git internals.
+        if ".git" in dirnames:
+            p = Path(dirpath).resolve()
+            if not _same_path(p, base) and not any(_same_path(p, f) for f in found):
+                found.append(p)
+            dirnames.remove(".git")
+        if depth >= 3:
+            dirnames[:] = []
+            continue
+        dirnames[:] = [d for d in dirnames if d not in PRUNE_DIRS]
+    found.sort(key=lambda p: (0 if _same_path(p, base) else 1, str(p).lower()))
+    return found
+
+
+def pick_local_repo(base: Path | None = None) -> Path:
+    """Numbered pick of git repos in the tree (depth <= 3). Enter = current."""
+    base = (base or Path.cwd()).resolve()
+    found = find_repos_in_tree(base)
+    if len(found) == 1:
+        print(dim("  no other git repos in this tree — using current folder"))
+        return base
+    print()
+    for i, p in enumerate(found, 1):
+        label = " (current)" if _same_path(p, base) else ""
+        shown = p.name if _same_path(p, base) else p.relative_to(base).as_posix()
+        print(f"  {green(str(i) + '.')}  {shown}{dim(label)}")
+    for _ in range(3):
+        try:
+            ans = input("\n  Select repo [Enter = current]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return base
+        if not ans:
+            return base
+        try:
+            i = int(ans)
+            if 1 <= i <= len(found):
+                return found[i - 1]
+        except ValueError:
+            pass
+        print("  ?")
+    return base
+
+
+def ask_history_defaults() -> tuple[str, list[str] | None]:
+    """Interactive: commit window (default yesterday) and authors (default all)."""
+    try:
+        since = input("  Commits since? [yesterday] ").strip() or "yesterday"
+        raw = input("  Authors? [all, comma-separated] ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return "yesterday", None
+    authors = [a.strip() for a in raw.split(",") if a.strip()] or None
+    return since, authors
+
+
+def interactive_menu() -> int:
+    """Bare `commit-brief`: pick a repo, set the window, run the pipeline."""
+    # first-run setup: tool checks + consent installs (runs once, then no-op)
+    from .bootstrap import bootstrap
+
+    bootstrap(interactive=True)
+    print()
+    print(bold(cyan("  ⚡ commit-brief — standup digest from git history")))
+    print(dim("  ───────────────────────────────────────────────"))
+    repo = pick_local_repo()
+    if not (repo / ".git").exists():
+        parent = find_repo(repo)
+        if parent is not None:
+            print(dim(f"  current folder is inside {parent} — using that repo"))
+            repo = parent
+    print(dim(f"  Selected: {repo}"))
+    since, authors = ask_history_defaults()
+
+    model = os.environ.get("COMMIT_BRIEF_MODEL", DEFAULT_MODEL)
+    t0 = time.monotonic()
+    try:
+        commits = collect_commits(str(repo), since, None, authors)
+    except RuntimeError as e:
+        print(f"commit-brief: {e}", file=sys.stderr)
+        return 2
+
+    if not commits:
+        print(f"No commits since '{since}' in {repo}.")
+        return 0
+
+    print(dim(f"  summarizing {len(commits)} commits with {model}…"), file=sys.stderr)
+    try:
+        out = summarize(commits, model=model, api_key=None, bullets=False, dry_run=False)
+    except RuntimeError as e:
+        print(f"commit-brief: {e}", file=sys.stderr)
+        return 2
+
+    print()
+    print(out)
+    print()
+    print(ok(f"Done — {time.monotonic() - t0:.1f}s"))
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -25,7 +227,10 @@ examples:
   commit-brief --dry-run            see exactly what the LLM would receive
   commit-brief --json               raw commits, no API call
   commit-brief mcp                  start the MCP server
-  commit-brief mcp-test .           self-test the MCP server against a repo""",
+  commit-brief mcp-test .           self-test the MCP server against a repo
+
+interactive:
+  commit-brief (no arguments, tty)  guided menu: repo -> since -> authors -> digest""",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--repo", default=".", help="path to git repo (default: current dir)")
@@ -99,6 +304,14 @@ def cmd_mcp_test(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    if not argv:
+        # bare invocation → interactive menu (or help when stdin is piped)
+        if sys.stdin.isatty():
+            return interactive_menu()
+        build_parser().print_help()
+        return 0
     args = build_parser().parse_args(argv)
     if args.command:
         return args.func(args)

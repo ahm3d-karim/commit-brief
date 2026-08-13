@@ -11,6 +11,7 @@ import json
 import os
 import pathlib
 import subprocess
+import sys
 
 import pytest
 
@@ -94,6 +95,57 @@ def test_no_repo_anywhere_friendly_message(tmp_path, monkeypatch):
     assert "no git repository here or in any parent" in msg
     assert "rc=128" not in msg and "fatal:" not in msg
     assert "--repo" in msg
+
+
+# ---- interactive CLI + first-run bootstrap (v0.7) --------------------------
+
+
+def test_bare_piped_prints_help_without_hanging(monkeypatch, capsys):
+    """Bare invocation with piped stdin: help, exit 0, never blocks."""
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    assert cli.main([]) == 0
+    out = capsys.readouterr().out
+    assert "commit-brief" in out
+
+
+def test_ask_history_defaults(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda _p="": "")
+    assert cli.ask_history_defaults() == ("yesterday", None)
+    answers = iter(["3 days ago", "Alice, Bob"])
+    monkeypatch.setattr("builtins.input", lambda _p="": next(answers))
+    assert cli.ask_history_defaults() == ("3 days ago", ["Alice", "Bob"])
+
+
+def test_find_repos_in_tree_no_duplicates(tmp_path, monkeypatch):
+    """Running from inside a repo must list it exactly once (dedupe)."""
+    repo = make_repo(tmp_path, [("Alice", "x", None)])
+    monkeypatch.chdir(pathlib.Path(repo))
+    found = cli.find_repos_in_tree(pathlib.Path(repo))
+    assert len(found) == 1
+    assert pathlib.Path(found[0]).resolve() == pathlib.Path(repo).resolve()
+
+
+def test_bootstrap_declined_runs_nothing(tmp_path, monkeypatch, capsys):
+    """First-run with everything missing + all declines: zero installs, flag saved."""
+    from commit_brief import bootstrap as bs
+
+    cfg = tmp_path / "cfg.json"
+    monkeypatch.setenv("COMMIT_BRIEF_CONFIG", str(cfg))
+    monkeypatch.setattr(bs, "CONFIG_PATH", cfg)
+    calls = []
+    monkeypatch.setattr(bs.shutil, "which", lambda _c: None)
+    monkeypatch.setattr(bs.subprocess, "run", lambda *a, **k: calls.append(a) or None)
+    monkeypatch.setattr("builtins.input", lambda _p="": "n")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("COMMIT_BRIEF_API_KEY", raising=False)
+
+    bs.bootstrap(interactive=True)
+    assert calls == []  # declined -> no installer may run
+    assert bs._load_config().get("first_run_done") is True
+
+    capsys.readouterr()  # drain first-run output
+    bs.bootstrap(interactive=True)
+    assert capsys.readouterr().out == ""  # second call: silent no-op
 
 
 def test_summarize_dry_run(tmp_path):
