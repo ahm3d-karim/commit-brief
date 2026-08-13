@@ -9,6 +9,7 @@ import sys
 import time
 from pathlib import Path
 
+from .bootstrap import ensure_api_key
 from .core import DEFAULT_MODEL, collect_commits, find_repo, summarize
 
 # --------------------------------------------------------------------------
@@ -168,15 +169,8 @@ def ask_history_defaults() -> tuple[str, list[str] | None]:
     return since, authors
 
 
-def interactive_menu() -> int:
-    """Bare `commit-brief`: pick a repo, set the window, run the pipeline."""
-    # first-run setup: tool checks + consent installs (runs once, then no-op)
-    from .bootstrap import bootstrap
-
-    bootstrap(interactive=True)
-    print()
-    print(bold(cyan("  ⚡ commit-brief — standup digest from git history")))
-    print(dim("  ───────────────────────────────────────────────"))
+def _menu_local_flow() -> int:
+    """Local path: pick a repo from this tree, set window/authors, digest."""
     repo = pick_local_repo()
     if not (repo / ".git").exists():
         parent = find_repo(repo)
@@ -199,8 +193,10 @@ def interactive_menu() -> int:
         return 0
 
     print(dim(f"  summarizing {len(commits)} commits with {model}…"), file=sys.stderr)
+    api_key = ensure_api_key(interactive=True)
     try:
-        out = summarize(commits, model=model, api_key=None, bullets=False, dry_run=False)
+        out = summarize(commits, model=model, api_key=api_key,
+                        bullets=False, dry_run=False)
     except RuntimeError as e:
         print(f"commit-brief: {e}", file=sys.stderr)
         return 2
@@ -210,6 +206,45 @@ def interactive_menu() -> int:
     print()
     print(ok(f"Done — {time.monotonic() - t0:.1f}s"))
     return 0
+
+
+def _menu_github_flow() -> int:
+    """GitHub path: sign in if needed, pick repos from the account, digest."""
+    from .github import github_mode
+
+    since, authors = ask_history_defaults()
+    api_key = ensure_api_key(interactive=True)
+    model = os.environ.get("COMMIT_BRIEF_MODEL", DEFAULT_MODEL)
+    return github_mode(since, authors, api_key, model)
+
+
+def interactive_menu() -> int:
+    """Bare `commit-brief`: pick local or GitHub, then run the pipeline."""
+    # first-run setup: tool checks + consent installs (runs once, then no-op)
+    from .bootstrap import bootstrap
+
+    bootstrap(interactive=True)
+    print()
+    print(bold(cyan("  ⚡ commit-brief — standup digest from git history")))
+    print(dim("  ───────────────────────────────────────────────"))
+    while True:
+        print()
+        print("  1.  Local — this folder (or pick from this tree)")
+        print("  2.  GitHub — sign in, pick repos from your account")
+        print("  q.  Quit")
+        try:
+            choice = input("\n  Choice: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  bye")
+            return 0
+        if choice == "1":
+            return _menu_local_flow()
+        if choice == "2":
+            return _menu_github_flow()
+        if choice in ("q", "quit", "exit"):
+            print("  bye")
+            return 0
+        print("  ?")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -259,6 +294,11 @@ interactive:
     )
     p.add_argument(
         "--api-key", default=None, help="Anthropic API key (default: ANTHROPIC_API_KEY env)"
+    )
+    p.add_argument(
+        "--github",
+        action="store_true",
+        help="GitHub mode: sign in, pick repos from your account, digest each",
     )
 
     sub = p.add_subparsers(dest="command", metavar="")
@@ -316,6 +356,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command:
         return args.func(args)
 
+    if args.github:
+        from .github import github_mode
+
+        api_key = args.api_key or ensure_api_key(sys.stdin.isatty())
+        return github_mode(args.since, args.author, api_key, args.model)
+
     try:
         commits = collect_commits(args.repo, args.since, args.until, args.author)
     except RuntimeError as e:
@@ -330,11 +376,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"No commits since '{args.since}' in {args.repo}.")
         return 0
 
+    api_key = args.api_key or ensure_api_key(sys.stdin.isatty())
     try:
         out = summarize(
             commits,
             model=args.model,
-            api_key=args.api_key,
+            api_key=api_key,
             bullets=args.bullets,
             dry_run=args.dry_run,
         )

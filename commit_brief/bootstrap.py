@@ -29,7 +29,8 @@ TOOLS = [
 
 API_KEY_VARS = ("ANTHROPIC_API_KEY", "COMMIT_BRIEF_API_KEY")
 NO_API_KEY_NOTE = (
-    "no LLM API key found — summaries need one; --json and --dry-run work without it"
+    "no LLM API key yet — you will be asked for one when a summary is needed; "
+    "--json and --dry-run never need one"
 )
 
 
@@ -106,6 +107,52 @@ def _check_api_key() -> None:
     if any(os.environ.get(var) for var in API_KEY_VARS):
         return
     print(f"  note: {NO_API_KEY_NOTE}")
+
+
+def resolve_api_key() -> str | None:
+    """Resolve the Anthropic API key, or None.
+
+    Precedence: COMMIT_BRIEF_API_KEY env -> ANTHROPIC_API_KEY env ->
+    config['anthropic_api_key'] (CONFIG_PATH). Values are stripped; an
+    empty/whitespace-only value counts as unset.
+    """
+    for var in ("COMMIT_BRIEF_API_KEY", "ANTHROPIC_API_KEY"):
+        value = (os.environ.get(var) or "").strip()
+        if value:
+            return value
+    return (_load_config().get("anthropic_api_key") or "").strip() or None
+
+
+def ensure_api_key(interactive: bool) -> str | None:
+    """Return a usable Anthropic key, prompting and persisting one if needed.
+
+    A resolved key (env or config) is returned as-is. Otherwise, when
+    interactive, the user is asked to paste a key; a loosely valid answer is
+    merged into CONFIG_PATH (existing keys, incl. first_run_done, are
+    preserved) and returned. Returns None when no key exists and none can be
+    obtained.
+    """
+    resolved = resolve_api_key()
+    if resolved:
+        return resolved
+    if not interactive:
+        return None
+    prompt = (
+        "Anthropic API key not found. Paste one now (skippable — --json and "
+        "--dry-run work without it) [Enter to skip]: "
+    )
+    try:
+        key = input(prompt).strip()
+    except EOFError:
+        return None
+    if not key:
+        return None
+    if len(key) < 20 or " " in key:
+        print("invalid key format")
+        return None
+    config = _load_config()
+    _save_config({**config, "anthropic_api_key": key})
+    return key
 
 
 def bootstrap(interactive: bool) -> None:

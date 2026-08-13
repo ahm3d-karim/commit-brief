@@ -148,6 +148,74 @@ def test_bootstrap_declined_runs_nothing(tmp_path, monkeypatch, capsys):
     assert capsys.readouterr().out == ""  # second call: silent no-op
 
 
+# ---- API-key prompting + GitHub mode (v0.8) ---------------------------------
+
+
+def test_resolve_api_key_precedence(tmp_path, monkeypatch):
+    """env COMMIT_BRIEF_API_KEY > ANTHROPIC_API_KEY > config file."""
+    from commit_brief import bootstrap as bs
+
+    cfg = tmp_path / "c.json"
+    monkeypatch.setattr(bs, "CONFIG_PATH", cfg)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("COMMIT_BRIEF_API_KEY", raising=False)
+    assert bs.resolve_api_key() is None
+    bs._save_config({"anthropic_api_key": "sk-config-key-1234567890"})
+    assert bs.resolve_api_key() == "sk-config-key-1234567890"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env-a-1234567890123456")
+    assert bs.resolve_api_key() == "sk-env-a-1234567890123456"
+    monkeypatch.setenv("COMMIT_BRIEF_API_KEY", "sk-env-cb-123456789012345")
+    assert bs.resolve_api_key() == "sk-env-cb-123456789012345"
+
+
+def test_ensure_api_key_prompts_saves_rejects_bad(tmp_path, monkeypatch, capsys):
+    from commit_brief import bootstrap as bs
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("COMMIT_BRIEF_API_KEY", raising=False)
+    cfg = tmp_path / "c.json"
+    monkeypatch.setattr(bs, "CONFIG_PATH", cfg)
+    monkeypatch.setattr("builtins.input", lambda _p="": "sk-pasted-123456789012345678")
+    assert bs.ensure_api_key(interactive=True) == "sk-pasted-123456789012345678"
+    assert bs._load_config()["anthropic_api_key"] == "sk-pasted-123456789012345678"
+    # non-interactive never prompts
+    cfg2 = tmp_path / "c2.json"
+    monkeypatch.setattr(bs, "CONFIG_PATH", cfg2)
+    assert bs.ensure_api_key(interactive=False) is None
+    # malformed key rejected
+    monkeypatch.setattr("builtins.input", lambda _p="": "too short")
+    cfg3 = tmp_path / "c3.json"
+    monkeypatch.setattr(bs, "CONFIG_PATH", cfg3)
+    assert bs.ensure_api_key(interactive=True) is None
+    assert "invalid key format" in capsys.readouterr().out
+
+
+def test_github_parse_selection():
+    from commit_brief.github import parse_selection
+
+    assert parse_selection("1 3,5", 10) == [1, 3, 5]
+    assert parse_selection("2-4", 10) == [2, 3, 4]
+    assert parse_selection("all", 5) == [1, 2, 3, 4, 5]
+    assert parse_selection("11", 5) == []
+
+
+def test_parser_has_github_flag():
+    assert cli.build_parser().parse_args(["--github"]).github is True
+
+
+def test_menu_routes_github_and_quit(monkeypatch, capsys):
+    from commit_brief import bootstrap as bs
+
+    monkeypatch.setattr(bs, "bootstrap", lambda interactive: None)
+    monkeypatch.setattr(cli, "_menu_github_flow", lambda: 42)
+    monkeypatch.setattr("builtins.input", lambda _p="": "2")
+    assert cli.interactive_menu() == 42
+    monkeypatch.setattr("builtins.input", lambda _p="": "q")
+    capsys.readouterr()
+    assert cli.interactive_menu() == 0
+    assert "bye" in capsys.readouterr().out
+
+
 def test_summarize_dry_run(tmp_path):
     repo = make_repo(tmp_path, [("Alice", "feat: x", None)])
     out = summarize(collect_commits(repo=repo, since="1 day ago"), dry_run=True)
