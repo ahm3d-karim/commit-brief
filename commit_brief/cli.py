@@ -181,7 +181,6 @@ def _menu_local_flow() -> int:
     print(dim(f"  Selected: {repo}"))
     since, authors = ask_history_defaults()
 
-    model = os.environ.get("COMMIT_BRIEF_MODEL", DEFAULT_MODEL)
     t0 = time.monotonic()
     try:
         commits = collect_commits(str(repo), since, None, authors)
@@ -193,14 +192,15 @@ def _menu_local_flow() -> int:
         print(f"No commits since '{since}' in {repo}.")
         return 0
 
-    print(dim(f"  summarizing {len(commits)} commits with {model}…"), file=sys.stderr)
     provider = choose_provider()
     if provider == "none":
         print(warn("  skipped — no provider picked"))
         return 0
+    print(dim(f"  summarizing {len(commits)} commits with {provider}…"), file=sys.stderr)
     api_key = ensure_api_key(provider, interactive=True)
     try:
-        out = llm_summarize(commits, provider=provider, api_key=api_key)
+        out = llm_summarize(commits, provider=provider, api_key=api_key,
+                            model=os.environ.get("COMMIT_BRIEF_MODEL"))
     except RuntimeError as e:
         print(f"commit-brief: {e}", file=sys.stderr)
         return 2
@@ -222,8 +222,9 @@ def _menu_github_flow() -> int:
         print(warn("  skipped — no provider picked"))
         return 0
     api_key = ensure_api_key(provider, interactive=True)
-    model = os.environ.get("COMMIT_BRIEF_MODEL", DEFAULT_MODEL)
-    return github_mode(since, authors, api_key, model, provider=provider)
+    return github_mode(since, authors, api_key,
+                       model=os.environ.get("COMMIT_BRIEF_MODEL"),
+                       provider=provider)
 
 
 def interactive_menu() -> int:

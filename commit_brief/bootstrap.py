@@ -40,6 +40,16 @@ PROVIDER_KEY_ENVS = {
     "groq": "GROQ_API_KEY",
     "mistral": "MISTRAL_API_KEY",
     "ollama": None,
+    "huggingface": "HF_TOKEN",
+    "zai": "GLM_API_KEY",
+    "minimax": "MINIMAX_API_KEY",
+    "minimax_cn": "MINIMAX_CN_API_KEY",
+    "kimi": "KIMI_API_KEY",
+    "dashscope": "DASHSCOPE_API_KEY",
+    "xiaomi": "XIAOMI_API_KEY",
+    "kilocode": "KILOCODE_API_KEY",
+    "opencode_zen": "OPENCODE_ZEN_API_KEY",
+    "opencode_go": "OPENCODE_GO_API_KEY",
     "custom": None,
 }
 

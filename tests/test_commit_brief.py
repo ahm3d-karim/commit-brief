@@ -220,13 +220,23 @@ def test_menu_routes_github_and_quit(monkeypatch, capsys):
 
 
 def test_llm_provider_registry_complete():
+    """Provider registry mirrors Hermes' supported list (API-key providers)."""
     from commit_brief.llm import PROVIDERS
+    from commit_brief.bootstrap import PROVIDER_KEY_ENVS
 
-    for name in ("anthropic", "openai", "openrouter", "gemini", "xai",
-                 "deepseek", "groq", "mistral", "ollama", "custom"):
-        assert name in PROVIDERS
+    expected = (
+        "anthropic openai openrouter gemini xai deepseek groq mistral ollama "
+        "huggingface zai minimax minimax_cn kimi dashscope xiaomi kilocode "
+        "opencode_zen opencode_go custom"
+    ).split()
+    assert set(PROVIDERS) == set(expected)
     assert PROVIDERS["ollama"]["key_env"] is None
     assert PROVIDERS["openai"]["key_env"] == "OPENAI_API_KEY"
+    assert PROVIDERS["opencode_go"]["key_env"] == "OPENCODE_GO_API_KEY"
+    # no drift between the two registries (llm.PROVIDERS vs bootstrap.PROVIDER_KEY_ENVS)
+    assert set(PROVIDERS) == set(PROVIDER_KEY_ENVS)
+    for name, p in PROVIDERS.items():
+        assert p["key_env"] == PROVIDER_KEY_ENVS[name], name
 
 
 def test_llm_summarize_dry_run_needs_no_key(tmp_path, monkeypatch):
@@ -286,6 +296,42 @@ def test_cli_provider_flags(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "flag path" in out
     assert cli.main(["--provider", "bogus", "--dry-run"]) == 2
+
+
+def test_custom_provider_prompts_for_model_not_default(tmp_path, monkeypatch):
+    """Regression: custom must ASK for base URL + model — the Anthropic
+    DEFAULT_MODEL must never be sent to a custom endpoint."""
+    from commit_brief import llm
+
+    repo = make_repo(tmp_path, [("Alice", "custom model", None)])
+    commits = collect_commits(repo=repo, since="1 day ago")
+    sent = {}
+    monkeypatch.setattr(
+        llm, "call_llm",
+        lambda provider, prompt, cfg: sent.update(cfg) or "digest ok",
+    )
+    answers = iter(["http://localhost:8000/v1", "my-own-model-7b"])
+    monkeypatch.setattr("builtins.input", lambda _p="": next(answers))
+    out = llm.summarize(commits, provider="custom", api_key="sk-x-123456789012345678")
+    assert out == "digest ok"
+    assert sent["model"] == "my-own-model-7b"  # the user's choice, not DEFAULT_MODEL
+    assert sent["base_url"] == "http://localhost:8000/v1"
+    assert sent["key"] == "sk-x-123456789012345678"
+
+
+def test_menu_local_flow_no_default_model_leak(tmp_path, monkeypatch, capsys):
+    """The menu path must not inject DEFAULT_MODEL into llm_summarize."""
+    repo = make_repo(tmp_path, [("Alice", "leak check", None)])
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(cli, "pick_local_repo", lambda: pathlib.Path(repo))
+    monkeypatch.setattr(cli, "choose_provider", lambda: "custom")
+    monkeypatch.setattr(cli, "ensure_api_key", lambda provider, interactive=True: "sk-x-123456789012345678")
+    seen = {}
+    monkeypatch.setattr(cli, "llm_summarize", lambda commits, **kw: seen.update(kw) or "digest")
+    monkeypatch.setattr("builtins.input", lambda _p="": "")
+    assert cli._menu_local_flow() == 0
+    assert seen["provider"] == "custom"
+    assert seen.get("model") is None  # env unset → None, NOT the Anthropic default
 
 
 def test_summarize_dry_run(tmp_path):

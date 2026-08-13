@@ -31,7 +31,7 @@ import urllib.request
 from pathlib import Path
 
 from . import bootstrap
-from .core import DEFAULT_MODEL, collect_commits
+from .core import collect_commits
 from .llm import summarize as llm_summarize
 
 API = "https://api.github.com"
@@ -444,7 +444,7 @@ def _digest_repo(
         return llm_summarize(
             commits,
             provider=provider,
-            model=model or DEFAULT_MODEL,
+            model=model,  # None → llm_setup resolves the registry default (or prompts for custom)
             api_key=api_key,
             base_url=base_url,
         )
