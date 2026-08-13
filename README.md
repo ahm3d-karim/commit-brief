@@ -68,10 +68,15 @@ Bare `commit-brief` (no args) opens a menu:
   pick repos from your account — numbers, ranges, search, or any
   `owner/repo` — and get a per-repo digest
 
-First run checks git/uv/python and offers consent-based installs. If no
-Anthropic key is set, you're asked to paste one when a summary is actually
-needed (skippable — `--json` and `--dry-run` never need a key). Non-
-interactive: `commit-brief --github` for GitHub mode with the usual flags.
+First run checks git/uv/python and offers consent-based installs, and asks
+for an API key exactly once if none is found anywhere (it is saved to
+`~/.commit-brief.json` as the default key). After that it never asks
+again — keys are resolved silently from the provider's env var
+(`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, …), the saved config, or Hermes'
+`.env` (so keys you already use with Hermes just work). Missing keys fail
+with a clean error instead of nagging; `--json` and `--dry-run` never need
+one. Non-interactive: `commit-brief --github` for GitHub mode with the
+usual flags.
 
 ## Multi-provider LLM (BYOK)
 
@@ -91,9 +96,10 @@ kilocode, opencode_zen, opencode_go, fireworks, novita, arcee, gmi,
 tencent, nvidia, stepfun, custom (any OpenAI-compatible endpoint).
 `--model` accepts any model identifier the provider supports; `custom`
 always asks for its base URL and model name, and never inherits another
-provider's default. Keys resolve from each provider's env var
-(`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `KILOCODE_API_KEY`, …) or are
-prompted-and-saved once per provider when a summary is needed.
+provider's default. Keys resolve silently, in order: provider env var →
+`~/.commit-brief.json` (`llm_keys`) → Hermes' `.env` → the saved default
+key. You are asked for a key only on the very first startup, and only when
+no key exists anywhere — never again.
 
 ## MCP server
 

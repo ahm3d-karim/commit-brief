@@ -1,6 +1,6 @@
 [project]
 name = "commit-brief"
-version = "0.10.1"
+version = "0.11.0"
 description = "Turn yesterday's git log into a one-paragraph standup summary"
 readme = "README.md"
 requires-python = ">=3.11"

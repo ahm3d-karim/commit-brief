@@ -282,6 +282,97 @@ def test_ensure_api_key_provider_aware(tmp_path, monkeypatch):
     assert bs.ensure_api_key(provider="ollama", interactive=True) is None
 
 
+def test_resolve_api_key_hermes_env_and_default(tmp_path, monkeypatch):
+    """Keys resolve from Hermes' .env and from a saved default key."""
+    from commit_brief import bootstrap as bs
+
+    cfg = tmp_path / "c.json"
+    monkeypatch.setattr(bs, "CONFIG_PATH", cfg)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("COMMIT_BRIEF_API_KEY", raising=False)
+    hermes = tmp_path / "hermes"
+    hermes.mkdir()
+    (hermes / ".env").write_text(
+        'OPENAI_API_KEY="sk-from-hermes-env-123456789012"\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(bs, "hermes_env_path", lambda: hermes / ".env")
+    assert bs.resolve_api_key(provider="openai") == "sk-from-hermes-env-123456789012"
+    assert bs.resolve_api_key(provider="anthropic") is None
+    # default key fallback for providers without their own key
+    bs._save_config({"llm_keys": {"default": "sk-default-1234567890123456"}})
+    assert bs.resolve_api_key(provider="deepseek") == "sk-default-1234567890123456"
+    # own key still beats the default
+    bs._save_config({"llm_keys": {"default": "sk-default-1234567890123456",
+                                  "deepseek": "sk-ds-own-1234567890123456"}})
+    assert bs.resolve_api_key(provider="deepseek") == "sk-ds-own-1234567890123456"
+
+
+def test_ensure_api_key_silent_after_first_run(tmp_path, monkeypatch):
+    """After first startup the tool must NEVER ask for a key again."""
+    from commit_brief import bootstrap as bs
+
+    cfg = tmp_path / "c.json"
+    monkeypatch.setattr(bs, "CONFIG_PATH", cfg)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(bs, "hermes_env_path", lambda: None)
+    bs._save_config({"first_run_done": True})
+
+    def _boom(*_a, **_k):
+        raise AssertionError("must not prompt after first run")
+
+    monkeypatch.setattr("builtins.input", _boom)
+    assert bs.ensure_api_key(provider="openai", interactive=True) is None
+
+
+def test_bootstrap_asks_default_key_once(tmp_path, monkeypatch, capsys):
+    """First startup with no key anywhere: one prompt, saved as default.
+    Second startup: silent, never prompts again."""
+    from commit_brief import bootstrap as bs
+
+    cfg = tmp_path / "c.json"
+    monkeypatch.setattr(bs, "CONFIG_PATH", cfg)
+    for var in bs.PROVIDER_KEY_ENVS.values():
+        if var:
+            monkeypatch.delenv(var, raising=False)
+    monkeypatch.delenv("COMMIT_BRIEF_API_KEY", raising=False)
+    monkeypatch.setattr(bs, "hermes_env_path", lambda: None)
+
+    monkeypatch.setattr("builtins.input", lambda _p="": "sk-default-123456789012345678")
+    bs.bootstrap(interactive=True)
+    assert bs._load_config()["llm_keys"]["default"] == "sk-default-123456789012345678"
+    assert bs._load_config()["first_run_done"] is True
+
+    def _boom(*_a, **_k):
+        raise AssertionError("second startup must not prompt")
+
+    monkeypatch.setattr("builtins.input", _boom)
+    capsys.readouterr()
+    bs.bootstrap(interactive=True)
+    assert capsys.readouterr().out == ""
+
+
+def test_bootstrap_no_key_prompt_when_key_exists(tmp_path, monkeypatch):
+    """A key anywhere (env, config, Hermes .env) silences the prompt."""
+    from commit_brief import bootstrap as bs
+
+    cfg = tmp_path / "c.json"
+    monkeypatch.setattr(bs, "CONFIG_PATH", cfg)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("COMMIT_BRIEF_API_KEY", raising=False)
+    monkeypatch.setattr(bs, "hermes_env_path", lambda: None)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-123456789012345678")
+
+    def _boom(*_a, **_k):
+        raise AssertionError("must not prompt when a key exists")
+
+    monkeypatch.setattr("builtins.input", _boom)
+    bs.bootstrap(interactive=True)
+    assert bs._load_config()["first_run_done"] is True
+    assert "default" not in bs._load_config().get("llm_keys", {})
+
+
 def test_choose_provider_picker(monkeypatch):
     from commit_brief import llm
 
@@ -337,6 +428,36 @@ def test_menu_local_flow_no_default_model_leak(tmp_path, monkeypatch, capsys):
     assert cli._menu_local_flow() == 0
     assert seen["provider"] == "custom"
     assert seen.get("model") is None  # env unset → None, NOT the Anthropic default
+
+
+def test_call_llm_request_shape(monkeypatch):
+    """The request must give reasoning models a real token budget."""
+    from commit_brief import llm
+
+    captured = {}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "digest"}}]}).encode()
+
+    def _fake_urlopen(req, timeout=60):
+        captured["body"] = json.loads(req.data)
+        captured["url"] = req.full_url
+        captured["auth"] = req.get_header("Authorization")
+        return _Resp()
+
+    monkeypatch.setattr(llm.urllib.request, "urlopen", _fake_urlopen)
+    out = llm.call_llm("deepseek", "prompt", {"key": "sk-x", "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat"})
+    assert out == "digest"
+    assert captured["body"]["max_tokens"] >= 2000
+    assert captured["url"].endswith("/chat/completions")
+    assert captured["auth"] == "Bearer sk-x"
 
 
 def test_summarize_dry_run(tmp_path):

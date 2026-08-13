@@ -60,11 +60,6 @@ PROVIDER_KEY_ENVS = {
     "custom": None,
 }
 
-NO_API_KEY_NOTE = (
-    "no LLM API key yet — you will be asked for one when a summary is needed; "
-    "--json and --dry-run never need one"
-)
-
 
 def _load_config() -> dict:
     """Read CONFIG_PATH as JSON; {} on missing, unreadable, or malformed file."""
@@ -134,31 +129,90 @@ def _check_tools(interactive: bool) -> None:
             print(f"  skipped — later: {hint}")
 
 
-def _check_api_key() -> None:
-    """Note a missing LLM API key (any provider); never prompts for one."""
+def hermes_env_path() -> Path | None:
+    """Hermes' .env file if present — most of the user's keys live there.
+
+    HERMES_HOME env wins; otherwise the platform default
+    (AppData/Local/hermes on Windows, ~/.hermes on POSIX).
+    """
+    home = os.environ.get("HERMES_HOME")
+    if not home:
+        if os.name == "nt":
+            local = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+            home = str(Path(local) / "hermes")
+        else:
+            home = str(Path.home() / ".hermes")
+    env_file = Path(home) / ".env"
+    return env_file if env_file.exists() else None
+
+
+def _env_file_key(env_file: Path | None, var: str) -> str | None:
+    """Value of VAR= in an env file (no shell parsing; quotes stripped)."""
+    if not env_file:
+        return None
+    try:
+        for line in env_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if line.startswith(var + "="):
+                value = line.split("=", 1)[1].strip().strip('"').strip("'")
+                return value or None
+    except OSError:
+        return None
+    return None
+
+
+def _any_key_resolved() -> bool:
+    """True if ANY provider key exists (env, config, or Hermes .env)."""
     if any(os.environ.get(var) for var in API_KEY_VARS):
-        return
+        return True
     if any(var and os.environ.get(var) for var in PROVIDER_KEY_ENVS.values()):
-        return
+        return True
     config = _load_config()
     llm_keys = config.get("llm_keys")
     if isinstance(llm_keys, dict) and any(
         (value or "").strip() for value in llm_keys.values()
     ):
-        return
+        return True
     if (config.get("anthropic_api_key") or "").strip():
+        return True
+    env_file = hermes_env_path()
+    return any(
+        var and _env_file_key(env_file, var)
+        for var in PROVIDER_KEY_ENVS.values()
+    )
+
+
+def _ask_default_key(interactive: bool) -> None:
+    """First-startup prompt when NO key exists anywhere; saves a default
+    key used by any provider without its own. Skippable."""
+    if not interactive or _any_key_resolved():
         return
-    print(f"  note: {NO_API_KEY_NOTE}")
+    try:
+        key = input(
+            "  No LLM API key found. Paste one (used by any provider "
+            "without its own key) [Enter to skip]: "
+        ).strip()
+    except EOFError:
+        return
+    if len(key) < 20 or " " in key:
+        return
+    config = _load_config()
+    llm_keys = config.get("llm_keys")
+    llm_keys = dict(llm_keys) if isinstance(llm_keys, dict) else {}
+    llm_keys["default"] = key
+    _save_config({**config, "llm_keys": llm_keys})
+    print("  ok default API key saved to config")
 
 
 def resolve_api_key(provider: str = "anthropic") -> str | None:
     """Resolve the API key for a provider, or None.
 
     Precedence: provider env var (e.g. ANTHROPIC_API_KEY) -> config
-    ['llm_keys'][provider] -> legacy config['anthropic_api_key'] (anthropic
-    only). COMMIT_BRIEF_API_KEY still applies as a legacy override for
-    anthropic, ahead of ANTHROPIC_API_KEY. Values are stripped; an
-    empty/whitespace-only value counts as unset. Providers without an env var
+    ['llm_keys'][provider] -> Hermes .env (provider env var) -> legacy
+    config['anthropic_api_key'] (anthropic only) -> config
+    ['llm_keys']['default']. COMMIT_BRIEF_API_KEY still applies as a legacy
+    override for anthropic, ahead of ANTHROPIC_API_KEY. Values are
+    stripped; empty/whitespace-only counts as unset. Keyless providers
     (ollama, custom) fall straight through to the config.
     """
     if provider == "anthropic":
@@ -177,8 +231,18 @@ def resolve_api_key(provider: str = "anthropic") -> str | None:
         value = (llm_keys.get(provider) or "").strip()
         if value:
             return value
+    if env_var:
+        value = _env_file_key(hermes_env_path(), env_var)
+        if value:
+            return value
     if provider == "anthropic":
-        return (config.get("anthropic_api_key") or "").strip() or None
+        value = (config.get("anthropic_api_key") or "").strip()
+        if value:
+            return value
+    if isinstance(llm_keys, dict):
+        value = (llm_keys.get("default") or "").strip()
+        if value:
+            return value
     return None
 
 
@@ -205,6 +269,10 @@ def ensure_api_key(
     if resolved:
         return resolved
     if not interactive:
+        return None
+    # keys are asked for only on first startup (bootstrap) — afterwards the
+    # clean "API key is not set" error is preferred over nagging
+    if _load_config().get(FIRST_RUN_KEY):
         return None
     prompt = (
         f"{provider} API key not found. Paste one now (skippable — --json and "
@@ -234,16 +302,20 @@ def ensure_api_key(
 
 
 def bootstrap(interactive: bool) -> None:
-    """First-run setup: check tools, consent-based installs, API key note, flag once.
+    """First-run setup: check tools, consent-based installs, ask for a
+    default API key when none exists anywhere, flag once.
 
-    Persists {first_run_done: True} in CONFIG_PATH (merged with any existing
-    keys). A subsequent call returns without printing anything.
+    The key is asked exactly ONCE (this first startup) — later runs
+    resolve keys from env / config / Hermes' .env silently. Persists
+    {first_run_done: True} in CONFIG_PATH (merged with any existing keys).
+    A subsequent call returns without printing anything.
     """
     config = _load_config()
     if config.get(FIRST_RUN_KEY):
         return
     _check_tools(interactive)
-    _check_api_key()
+    _ask_default_key(interactive)
+    config = _load_config()  # re-read — the key prompt may have saved keys
     config[FIRST_RUN_KEY] = True
     _save_config(config)
 

@@ -426,7 +426,7 @@ def call_llm(provider: str, prompt: str, cfg: dict) -> str:
     body = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 500,
+        "max_tokens": 4000,  # reasoning models burn budget before content
         "temperature": 0.3,
     }
     headers = {
