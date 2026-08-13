@@ -28,6 +28,21 @@ TOOLS = [
 ]
 
 API_KEY_VARS = ("ANTHROPIC_API_KEY", "COMMIT_BRIEF_API_KEY")
+
+# provider -> env var holding its API key (None: provider needs no key)
+PROVIDER_KEY_ENVS = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "xai": "XAI_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
+    "ollama": None,
+    "custom": None,
+}
+
 NO_API_KEY_NOTE = (
     "no LLM API key yet — you will be asked for one when a summary is needed; "
     "--json and --dry-run never need one"
@@ -103,42 +118,79 @@ def _check_tools(interactive: bool) -> None:
 
 
 def _check_api_key() -> None:
-    """Note a missing LLM API key; never prompts for one."""
+    """Note a missing LLM API key (any provider); never prompts for one."""
     if any(os.environ.get(var) for var in API_KEY_VARS):
+        return
+    if any(var and os.environ.get(var) for var in PROVIDER_KEY_ENVS.values()):
+        return
+    config = _load_config()
+    llm_keys = config.get("llm_keys")
+    if isinstance(llm_keys, dict) and any(
+        (value or "").strip() for value in llm_keys.values()
+    ):
+        return
+    if (config.get("anthropic_api_key") or "").strip():
         return
     print(f"  note: {NO_API_KEY_NOTE}")
 
 
-def resolve_api_key() -> str | None:
-    """Resolve the Anthropic API key, or None.
+def resolve_api_key(provider: str = "anthropic") -> str | None:
+    """Resolve the API key for a provider, or None.
 
-    Precedence: COMMIT_BRIEF_API_KEY env -> ANTHROPIC_API_KEY env ->
-    config['anthropic_api_key'] (CONFIG_PATH). Values are stripped; an
-    empty/whitespace-only value counts as unset.
+    Precedence: provider env var (e.g. ANTHROPIC_API_KEY) -> config
+    ['llm_keys'][provider] -> legacy config['anthropic_api_key'] (anthropic
+    only). COMMIT_BRIEF_API_KEY still applies as a legacy override for
+    anthropic, ahead of ANTHROPIC_API_KEY. Values are stripped; an
+    empty/whitespace-only value counts as unset. Providers without an env var
+    (ollama, custom) fall straight through to the config.
     """
-    for var in ("COMMIT_BRIEF_API_KEY", "ANTHROPIC_API_KEY"):
-        value = (os.environ.get(var) or "").strip()
+    if provider == "anthropic":
+        # legacy generic override keeps precedence over the provider env
+        value = (os.environ.get("COMMIT_BRIEF_API_KEY") or "").strip()
         if value:
             return value
-    return (_load_config().get("anthropic_api_key") or "").strip() or None
+    env_var = PROVIDER_KEY_ENVS.get(provider)
+    if env_var:
+        value = (os.environ.get(env_var) or "").strip()
+        if value:
+            return value
+    config = _load_config()
+    llm_keys = config.get("llm_keys")
+    if isinstance(llm_keys, dict):
+        value = (llm_keys.get(provider) or "").strip()
+        if value:
+            return value
+    if provider == "anthropic":
+        return (config.get("anthropic_api_key") or "").strip() or None
+    return None
 
 
-def ensure_api_key(interactive: bool) -> str | None:
-    """Return a usable Anthropic key, prompting and persisting one if needed.
+def ensure_api_key(
+    provider: str = "anthropic", interactive: bool = False
+) -> str | None:
+    """Return a usable API key for a provider, prompting and persisting if needed.
 
     A resolved key (env or config) is returned as-is. Otherwise, when
     interactive, the user is asked to paste a key; a loosely valid answer is
-    merged into CONFIG_PATH (existing keys, incl. first_run_done, are
-    preserved) and returned. Returns None when no key exists and none can be
-    obtained.
+    merged into CONFIG_PATH under config['llm_keys'][provider] (existing keys,
+    incl. first_run_done, are preserved) and returned. Returns None when no
+    key exists and none can be obtained. Keyless providers (ollama) return
+    None without prompting.
+
+    Backward-compatible positional bool: ensure_api_key(True) still means
+    interactive=True for anthropic.
     """
-    resolved = resolve_api_key()
+    if isinstance(provider, bool):
+        provider, interactive = "anthropic", provider
+    if provider == "ollama":  # keyless provider: never prompts
+        return None
+    resolved = resolve_api_key(provider)
     if resolved:
         return resolved
     if not interactive:
         return None
     prompt = (
-        "Anthropic API key not found. Paste one now (skippable — --json and "
+        f"{provider} API key not found. Paste one now (skippable — --json and "
         "--dry-run work without it) [Enter to skip]: "
     )
     try:
@@ -147,11 +199,20 @@ def ensure_api_key(interactive: bool) -> str | None:
         return None
     if not key:
         return None
-    if len(key) < 20 or " " in key:
+    if provider != "custom" and (len(key) < 20 or " " in key):
         print("invalid key format")
         return None
     config = _load_config()
-    _save_config({**config, "anthropic_api_key": key})
+    llm_keys = config.get("llm_keys")
+    llm_keys = dict(llm_keys) if isinstance(llm_keys, dict) else {}
+    llm_keys[provider] = key
+    new_config = {**config, "llm_keys": llm_keys}
+    if provider == "anthropic":
+        # migration nicety: the legacy flat key is folded into llm_keys and the
+        # legacy slot is kept in sync (not dropped) — current tests still read
+        # config['anthropic_api_key'] directly after a save.
+        new_config["anthropic_api_key"] = key
+    _save_config(new_config)
     return key
 
 

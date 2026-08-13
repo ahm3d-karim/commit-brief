@@ -216,6 +216,78 @@ def test_menu_routes_github_and_quit(monkeypatch, capsys):
     assert "bye" in capsys.readouterr().out
 
 
+# ---- multi-provider LLM (v0.9) ----------------------------------------------
+
+
+def test_llm_provider_registry_complete():
+    from commit_brief.llm import PROVIDERS
+
+    for name in ("anthropic", "openai", "openrouter", "gemini", "xai",
+                 "deepseek", "groq", "mistral", "ollama", "custom"):
+        assert name in PROVIDERS
+    assert PROVIDERS["ollama"]["key_env"] is None
+    assert PROVIDERS["openai"]["key_env"] == "OPENAI_API_KEY"
+
+
+def test_llm_summarize_dry_run_needs_no_key(tmp_path, monkeypatch):
+    """dry-run returns the prompt for ANY provider with zero key/network."""
+    from commit_brief.llm import summarize
+
+    repo = make_repo(tmp_path, [("Alice", "feat: multi-provider", None)])
+    commits = collect_commits(repo=repo, since="1 day ago")
+    out = summarize(commits, provider="openai", dry_run=True)
+    assert "feat: multi-provider" in out
+    assert "Write ONE paragraph" in out
+    out2 = summarize(commits, provider="groq", dry_run=True)
+    assert "feat: multi-provider" in out2
+
+
+def test_llm_summarize_rejects_unknown_provider(tmp_path, monkeypatch):
+    from commit_brief.llm import summarize
+
+    repo = make_repo(tmp_path, [("Alice", "x", None)])
+    commits = collect_commits(repo=repo, since="1 day ago")
+    with pytest.raises(RuntimeError):
+        summarize(commits, provider="not-a-provider", dry_run=True)
+
+
+def test_ensure_api_key_provider_aware(tmp_path, monkeypatch):
+    from commit_brief import bootstrap as bs
+
+    cfg = tmp_path / "c.json"
+    monkeypatch.setattr(bs, "CONFIG_PATH", cfg)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("COMMIT_BRIEF_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-env-12345678901234")
+    assert bs.resolve_api_key(provider="openai") == "sk-openai-env-12345678901234"
+    assert bs.resolve_api_key(provider="anthropic") is None
+    # ollama never prompts, never needs a key
+    monkeypatch.setattr("builtins.input", lambda _p="": "")
+    assert bs.ensure_api_key(provider="ollama", interactive=True) is None
+
+
+def test_choose_provider_picker(monkeypatch):
+    from commit_brief import llm
+
+    monkeypatch.setattr("builtins.input", lambda _p="": "1")
+    assert llm.choose_provider() == "anthropic"
+    monkeypatch.setattr("builtins.input", lambda _p="": "openai")
+    assert llm.choose_provider() == "openai"
+    monkeypatch.setattr("builtins.input", lambda _p="": "q")
+    assert llm.choose_provider() == "none"
+
+
+def test_cli_provider_flags(monkeypatch, tmp_path, capsys):
+    """--provider X --dry-run prints the prompt without any key."""
+    repo = make_repo(tmp_path, [("Alice", "flag path", None)])
+    assert cli.main(["--repo", str(repo), "--since", "1 day ago",
+                     "--provider", "deepseek", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "flag path" in out
+    assert cli.main(["--provider", "bogus", "--dry-run"]) == 2
+
+
 def test_summarize_dry_run(tmp_path):
     repo = make_repo(tmp_path, [("Alice", "feat: x", None)])
     out = summarize(collect_commits(repo=repo, since="1 day ago"), dry_run=True)

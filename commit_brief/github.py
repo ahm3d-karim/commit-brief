@@ -31,7 +31,8 @@ import urllib.request
 from pathlib import Path
 
 from . import bootstrap
-from .core import DEFAULT_MODEL, collect_commits, summarize
+from .core import DEFAULT_MODEL, collect_commits
+from .llm import summarize as llm_summarize
 
 API = "https://api.github.com"
 USER_AGENT = "commit-brief/0.7.0"
@@ -424,6 +425,8 @@ def _digest_repo(
     authors: list[str] | None,
     api_key: str | None,
     model: str | None,
+    provider: str,
+    base_url: str | None,
 ) -> str:
     """Clone one repo and produce its standup digest. Returns the digest
     text, or '' when there are no commits in the window. Raises
@@ -438,7 +441,13 @@ def _digest_repo(
         if not commits:
             print(f"No commits since {since} in {name}.")
             return ""
-        return summarize(commits, model=model or DEFAULT_MODEL, api_key=api_key)
+        return llm_summarize(
+            commits,
+            provider=provider,
+            model=model or DEFAULT_MODEL,
+            api_key=api_key,
+            base_url=base_url,
+        )
     finally:
         _rmtree_force(str(work))
 
@@ -448,6 +457,8 @@ def github_mode(
     authors: list[str] | None,
     api_key: str | None,
     model: str | None = None,
+    provider: str = "anthropic",
+    base_url: str | None = None,
 ) -> int:
     """GitHub mode end to end: connect -> list -> pick -> per-repo digest.
     Returns 0 when every selected repo produced a digest, 1 if any failed."""
@@ -468,7 +479,8 @@ def github_mode(
         name = repo["full_name"]
         print(dim(f"  [{i}/{len(chosen)}] {name}…"))
         try:
-            digest = _digest_repo(token, repo, since, authors, api_key, model)
+            digest = _digest_repo(token, repo, since, authors, api_key, model,
+                                  provider, base_url)
         except (GitHubError, RuntimeError) as e:
             failed += 1
             print(err(f"  {name}: {e}"), file=sys.stderr)

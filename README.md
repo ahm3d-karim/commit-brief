@@ -73,6 +73,22 @@ Anthropic key is set, you're asked to paste one when a summary is actually
 needed (skippable — `--json` and `--dry-run` never need a key). Non-
 interactive: `commit-brief --github` for GitHub mode with the usual flags.
 
+## Multi-provider LLM (BYOK)
+
+Any provider, any key. Pick interactively in the menu, or pass flags:
+
+```bash
+commit-brief --provider deepseek --since '3 days ago'
+commit-brief --provider openai --model gpt-4o-mini
+commit-brief --provider groq --dry-run        # prompt only, no key needed
+commit-brief --provider custom --base-url http://localhost:8000/v1 --model llama3.1
+```
+
+Providers: anthropic, openai, openrouter, gemini, xai, deepseek, groq,
+mistral, ollama (local, no key), custom (any OpenAI-compatible endpoint).
+Keys resolve from the provider's env var (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`,
+…) or are prompted-and-saved once per provider when a summary is needed.
+
 ## MCP server
 
 The server exposes the same core as two tools: `summarize_standup` and

@@ -10,7 +10,8 @@ import time
 from pathlib import Path
 
 from .bootstrap import ensure_api_key
-from .core import DEFAULT_MODEL, collect_commits, find_repo, summarize
+from .core import DEFAULT_MODEL, collect_commits, find_repo
+from .llm import PROVIDERS, choose_provider, summarize as llm_summarize
 
 # --------------------------------------------------------------------------
 # terminal styling — zero-dep ANSI; inert when piped or NO_COLOR
@@ -193,10 +194,13 @@ def _menu_local_flow() -> int:
         return 0
 
     print(dim(f"  summarizing {len(commits)} commits with {model}…"), file=sys.stderr)
-    api_key = ensure_api_key(interactive=True)
+    provider = choose_provider()
+    if provider == "none":
+        print(warn("  skipped — no provider picked"))
+        return 0
+    api_key = ensure_api_key(provider, interactive=True)
     try:
-        out = summarize(commits, model=model, api_key=api_key,
-                        bullets=False, dry_run=False)
+        out = llm_summarize(commits, provider=provider, api_key=api_key)
     except RuntimeError as e:
         print(f"commit-brief: {e}", file=sys.stderr)
         return 2
@@ -213,9 +217,13 @@ def _menu_github_flow() -> int:
     from .github import github_mode
 
     since, authors = ask_history_defaults()
-    api_key = ensure_api_key(interactive=True)
+    provider = choose_provider()
+    if provider == "none":
+        print(warn("  skipped — no provider picked"))
+        return 0
+    api_key = ensure_api_key(provider, interactive=True)
     model = os.environ.get("COMMIT_BRIEF_MODEL", DEFAULT_MODEL)
-    return github_mode(since, authors, api_key, model)
+    return github_mode(since, authors, api_key, model, provider=provider)
 
 
 def interactive_menu() -> int:
@@ -293,7 +301,18 @@ interactive:
         help="Anthropic model (env: COMMIT_BRIEF_MODEL)",
     )
     p.add_argument(
-        "--api-key", default=None, help="Anthropic API key (default: ANTHROPIC_API_KEY env)"
+        "--api-key", default=None, help="LLM API key for the selected provider"
+    )
+    p.add_argument(
+        "--provider",
+        metavar="NAME",
+        default=None,
+        help="LLM provider: anthropic, openai, openrouter, gemini, xai, "
+        "deepseek, groq, mistral, ollama, custom (default: anthropic)",
+    )
+    p.add_argument(
+        "--base-url", metavar="URL",
+        help="OpenAI-compatible base URL (with --provider custom)",
     )
     p.add_argument(
         "--github",
@@ -359,8 +378,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.github:
         from .github import github_mode
 
-        api_key = args.api_key or ensure_api_key(sys.stdin.isatty())
-        return github_mode(args.since, args.author, api_key, args.model)
+        provider = args.provider or "anthropic"
+        if provider not in PROVIDERS:
+            print(f"commit-brief: unknown provider '{provider}'", file=sys.stderr)
+            return 2
+        api_key = args.api_key or ensure_api_key(provider, sys.stdin.isatty())
+        return github_mode(args.since, args.author, api_key, args.model,
+                           provider=provider, base_url=args.base_url)
 
     try:
         commits = collect_commits(args.repo, args.since, args.until, args.author)
@@ -376,12 +400,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"No commits since '{args.since}' in {args.repo}.")
         return 0
 
-    api_key = args.api_key or ensure_api_key(sys.stdin.isatty())
+    provider = args.provider or "anthropic"
+    if provider not in PROVIDERS:
+        print(f"commit-brief: unknown provider '{provider}'", file=sys.stderr)
+        return 2
+    api_key = args.api_key if args.dry_run else (
+        args.api_key or ensure_api_key(provider, sys.stdin.isatty())
+    )
     try:
-        out = summarize(
+        out = llm_summarize(
             commits,
+            provider=provider,
             model=args.model,
             api_key=api_key,
+            base_url=args.base_url,
             bullets=args.bullets,
             dry_run=args.dry_run,
         )
