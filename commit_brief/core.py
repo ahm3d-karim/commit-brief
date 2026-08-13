@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 DEFAULT_MODEL = "claude-sonnet-4-20250514"
 
@@ -66,6 +67,14 @@ def run_git(repo: str, args: list[str]) -> str:
     return proc.stdout
 
 
+def find_repo(start: Path) -> Path | None:
+    """Nearest .git above start — git's own walk-up behavior."""
+    for p in (start, *start.parents):
+        if (p / ".git").exists():
+            return p
+    return None
+
+
 def collect_commits(
     repo: str = ".",
     since: str = "yesterday",
@@ -76,6 +85,10 @@ def collect_commits(
 
     `since`/`until` accept anything git accepts ('yesterday', '3 days ago',
     '2026-08-01'). `authors` maps to repeated --author flags (OR semantics).
+
+    When the default repo ('.') is not a git repository, walks up from the
+    current directory like git itself does; if none is found, raises a
+    friendly error instead of git's raw fatal.
     """
     fmt = "%x1e%h%x1f%an%x1f%aI%x1f%s%x1f%b%x1d%D%x1d"
     args = [
@@ -89,7 +102,19 @@ def collect_commits(
     for a in authors or []:
         args.append(f"--author={a}")
 
-    out = run_git(repo, args)
+    try:
+        out = run_git(repo, args)
+    except RuntimeError as e:
+        if repo in (".", "~") and "not a git repository" in str(e):
+            found = find_repo(Path.cwd())
+            if found is None:
+                raise RuntimeError(
+                    "no git repository here or in any parent directory — "
+                    "cd into a repo or pass --repo <path>"
+                ) from None
+            out = run_git(str(found), args)
+        else:
+            raise
     commits: list[Commit] = []
     for chunk in out.split("\x1e"):
         if not chunk.strip():

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import subprocess
 
 import pytest
@@ -72,6 +73,27 @@ def test_empty_window(tmp_path):
 def test_not_a_repo_raises(tmp_path):
     with pytest.raises(RuntimeError):
         collect_commits(repo=str(tmp_path / "nope"))
+
+
+def test_walk_up_from_subdir(tmp_path, monkeypatch):
+    """Running inside a subdir of a repo resolves the repo like git does."""
+    repo = make_repo(tmp_path, [("Alice", "feat: x", None)])
+    sub = pathlib.Path(repo) / "sub" / "deeper"
+    sub.mkdir(parents=True)
+    monkeypatch.chdir(sub)
+    commits = collect_commits(repo=".")
+    assert [c.subject for c in commits] == ["feat: x"]
+
+
+def test_no_repo_anywhere_friendly_message(tmp_path, monkeypatch):
+    """Outside any repo: friendly actionable error, never git's raw fatal."""
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(RuntimeError) as exc:
+        collect_commits(repo=".")
+    msg = str(exc.value)
+    assert "no git repository here or in any parent" in msg
+    assert "rc=128" not in msg and "fatal:" not in msg
+    assert "--repo" in msg
 
 
 def test_summarize_dry_run(tmp_path):
