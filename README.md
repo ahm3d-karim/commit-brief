@@ -58,6 +58,21 @@ commit-brief --json
 `2026-08-01`. `--author` is repeatable (OR). Exit codes: 0 ok / no commits,
 2 git or API error.
 
+## Interactive menu + GitHub mode
+
+Bare `commit-brief` (no args) opens a menu:
+
+- **Local** — this folder, or pick any git repo in the current tree; asks
+  for the commit window (default `yesterday`) and authors (default all)
+- **GitHub** — sign in (reuses your `gh` CLI login, or paste a token once),
+  pick repos from your account — numbers, ranges, search, or any
+  `owner/repo` — and get a per-repo digest
+
+First run checks git/uv/python and offers consent-based installs. If no
+Anthropic key is set, you're asked to paste one when a summary is actually
+needed (skippable — `--json` and `--dry-run` never need a key). Non-
+interactive: `commit-brief --github` for GitHub mode with the usual flags.
+
 ## MCP server
 
 The server exposes the same core as two tools: `summarize_standup` and
