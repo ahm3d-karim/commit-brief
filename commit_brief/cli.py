@@ -298,8 +298,8 @@ interactive:
     p.add_argument("--json", action="store_true", help="print raw commits as JSON; no API call")
     p.add_argument(
         "--model",
-        default=os.environ.get("COMMIT_BRIEF_MODEL", DEFAULT_MODEL),
-        help="Anthropic model (env: COMMIT_BRIEF_MODEL)",
+        default=None,
+        help="Model ID (default: per-provider registry model; env: COMMIT_BRIEF_MODEL)",
     )
     p.add_argument(
         "--api-key", default=None, help="LLM API key for the selected provider"

@@ -227,12 +227,17 @@ def test_llm_provider_registry_complete():
     expected = (
         "anthropic openai openrouter gemini xai deepseek groq mistral ollama "
         "huggingface zai minimax minimax_cn kimi dashscope xiaomi kilocode "
-        "opencode_zen opencode_go custom"
+        "opencode_zen opencode_go fireworks novita arcee gmi tencent nvidia "
+        "stepfun custom"
     ).split()
     assert set(PROVIDERS) == set(expected)
     assert PROVIDERS["ollama"]["key_env"] is None
     assert PROVIDERS["openai"]["key_env"] == "OPENAI_API_KEY"
     assert PROVIDERS["opencode_go"]["key_env"] == "OPENCODE_GO_API_KEY"
+    # endpoint pins (both were wrong once — marketing-site 404 / credits error):
+    # Go is the subscription tier, Zen is pay-per-use
+    assert PROVIDERS["opencode_go"]["base_url"] == "https://opencode.ai/zen/go/v1"
+    assert PROVIDERS["opencode_zen"]["base_url"] == "https://opencode.ai/zen/v1"
     # no drift between the two registries (llm.PROVIDERS vs bootstrap.PROVIDER_KEY_ENVS)
     assert set(PROVIDERS) == set(PROVIDER_KEY_ENVS)
     for name, p in PROVIDERS.items():

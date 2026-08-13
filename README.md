@@ -87,10 +87,11 @@ commit-brief --provider custom --base-url http://localhost:8000/v1 --model llama
 Providers (mirrors Hermes' supported list): anthropic, openai, openrouter,
 gemini, xai, deepseek, groq, mistral, ollama (local, no key), huggingface,
 zai (GLM), minimax, minimax_cn, kimi (moonshot), dashscope, xiaomi,
-kilocode, opencode_zen, opencode_go, custom (any OpenAI-compatible
-endpoint). `--model` accepts any model identifier the provider supports;
-`custom` always asks for its base URL and model name, and never inherits
-another provider's default. Keys resolve from each provider's env var
+kilocode, opencode_zen, opencode_go, fireworks, novita, arcee, gmi,
+tencent, nvidia, stepfun, custom (any OpenAI-compatible endpoint).
+`--model` accepts any model identifier the provider supports; `custom`
+always asks for its base URL and model name, and never inherits another
+provider's default. Keys resolve from each provider's env var
 (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `KILOCODE_API_KEY`, …) or are
 prompted-and-saved once per provider when a summary is needed.
 

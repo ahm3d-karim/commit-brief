@@ -50,6 +50,13 @@ PROVIDER_KEY_ENVS = {
     "kilocode": "KILOCODE_API_KEY",
     "opencode_zen": "OPENCODE_ZEN_API_KEY",
     "opencode_go": "OPENCODE_GO_API_KEY",
+    "fireworks": "FIREWORKS_API_KEY",
+    "novita": "NOVITA_API_KEY",
+    "arcee": "ARCEEAI_API_KEY",
+    "gmi": "GMI_API_KEY",
+    "tencent": "TOKENHUB_API_KEY",
+    "nvidia": "NVIDIA_API_KEY",
+    "stepfun": "STEPFUN_API_KEY",
     "custom": None,
 }
 
