@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import os
 import sys
@@ -257,6 +258,14 @@ def interactive_menu() -> int:
         print("  ?")
 
 
+def _version() -> str:
+    """Installed version via importlib.metadata; dev fallback when uninstalled."""
+    try:
+        return importlib.metadata.version("commit-brief")
+    except importlib.metadata.PackageNotFoundError:
+        return "0.0.0-dev"
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="commit-brief",
@@ -281,6 +290,7 @@ interactive:
   commit-brief (no arguments, tty)  guided menu: repo -> since -> authors -> digest""",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    p.add_argument("--version", action="version", version=f"commit-brief {_version()}")
     p.add_argument("--repo", default=".", help="path to git repo (default: current dir)")
     since_group = p.add_mutually_exclusive_group()
     since_group.add_argument(

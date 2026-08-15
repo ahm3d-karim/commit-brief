@@ -384,6 +384,14 @@ def test_choose_provider_picker(monkeypatch):
     assert llm.choose_provider() == "none"
 
 
+def test_version_flag(capsys):
+    """--version prints name + installed version and exits 0."""
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--version"])
+    assert exc.value.code == 0
+    assert "commit-brief" in capsys.readouterr().out
+
+
 def test_cli_provider_flags(monkeypatch, tmp_path, capsys):
     """--provider X --dry-run prints the prompt without any key."""
     repo = make_repo(tmp_path, [("Alice", "flag path", None)])
