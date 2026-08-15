@@ -9,6 +9,7 @@ import sys
 import time
 from pathlib import Path
 
+from . import hooks, state
 from .bootstrap import ensure_api_key
 from .core import DEFAULT_MODEL, collect_commits, find_repo
 from .llm import PROVIDERS, choose_provider, summarize as llm_summarize
@@ -263,13 +264,16 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="""subcommands:
   mcp         run the MCP server (stdio) so agents can call the tools
   mcp-test    end-to-end smoke test of the MCP server
+  hook        install/manage the commit-msg hook (conventional commits)
 
 examples:
   commit-brief                      standup digest for yesterday (current repo)
   commit-brief --since '3 days ago' --repo ../other-repo
+  commit-brief --since-last         digest only commits since the last digest
   commit-brief --author 'Alice' --bullets
   commit-brief --dry-run            see exactly what the LLM would receive
   commit-brief --json               raw commits, no API call
+  commit-brief hook install         enforce conventional commits in this repo
   commit-brief mcp                  start the MCP server
   commit-brief mcp-test .           self-test the MCP server against a repo
 
@@ -278,10 +282,16 @@ interactive:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--repo", default=".", help="path to git repo (default: current dir)")
-    p.add_argument(
+    since_group = p.add_mutually_exclusive_group()
+    since_group.add_argument(
         "--since",
         default="yesterday",
         help="git date spec: 'yesterday', '3 days ago', '2026-08-01'",
+    )
+    since_group.add_argument(
+        "--since-last",
+        action="store_true",
+        help="only commits since the last successful digest (per repo)",
     )
     p.add_argument("--until", default=None, help="git date spec, upper bound")
     p.add_argument(
@@ -332,6 +342,11 @@ interactive:
         help="git repo to test against (default: $CBR_TEST_REPO or current dir)",
     )
     test_p.set_defaults(func=cmd_mcp_test)
+    hook_p = sub.add_parser("hook", help="install/manage the commit-msg hook (conventional commits)")
+    hook_p.add_argument("action", choices=["install", "uninstall", "check", "status"])
+    hook_p.add_argument("--repo", default=".", help="path to git repo (default: current dir)")
+    hook_p.add_argument("msgfile", nargs="?", help="commit message file (with check)")
+    hook_p.set_defaults(func=cmd_hook)
     return p
 
 
@@ -363,6 +378,55 @@ def cmd_mcp_test(args) -> int:
     return run_smoke_test(repo)
 
 
+def cmd_hook(args) -> int:
+    """hook install|uninstall|check|status — commit-msg hook management.
+
+    `check` is the contract the installed git hook depends on: prints
+    'commit-brief: <reason>' to stderr and exits 0 on a valid message,
+    1 on an invalid one.
+    """
+    resolved = find_repo(Path(args.repo).resolve())
+    if resolved is None:
+        print(
+            f"commit-brief: not inside a git repository (walked up from {args.repo})",
+            file=sys.stderr,
+        )
+        return 2
+    repo = str(resolved)
+
+    if args.action == "install":
+        path = hooks.install_hook(repo)
+        print(ok(f"hook installed: {path}"))
+        return 0
+
+    if args.action == "uninstall":
+        if hooks.uninstall_hook(repo):
+            print(ok("hook removed"))
+        else:
+            print(warn("no commit-brief hook found (foreign hooks are left untouched)"))
+        return 0
+
+    if args.action == "status":
+        if hooks.hook_installed(repo):
+            print(ok("installed"))
+        else:
+            print(warn("not installed"))
+        return 0
+
+    # check
+    if args.msgfile is None:
+        print("commit-brief: hook check requires a message file", file=sys.stderr)
+        return 2
+    try:
+        msg = Path(args.msgfile).read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        print(f"commit-brief: cannot read {args.msgfile}: {e}", file=sys.stderr)
+        return 2
+    valid, reason = hooks.validate_message(msg)
+    print(f"commit-brief: {reason}", file=sys.stderr)
+    return 0 if valid else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
@@ -376,35 +440,43 @@ def main(argv: list[str] | None = None) -> int:
     if args.command:
         return args.func(args)
 
+    provider = args.provider or "anthropic"
+    if provider not in PROVIDERS:
+        print(f"commit-brief: unknown provider '{provider}'", file=sys.stderr)
+        return 2
+
+    if args.github and args.since_last:
+        print("commit-brief: --since-last is not supported with --github", file=sys.stderr)
+        return 2
+
     if args.github:
         from .github import github_mode
 
-        provider = args.provider or "anthropic"
-        if provider not in PROVIDERS:
-            print(f"commit-brief: unknown provider '{provider}'", file=sys.stderr)
-            return 2
         api_key = args.api_key or ensure_api_key(provider, sys.stdin.isatty())
         return github_mode(args.since, args.author, api_key, args.model,
                            provider=provider, base_url=args.base_url)
 
+    effective_since = "365 days ago" if args.since_last else args.since
     try:
-        commits = collect_commits(args.repo, args.since, args.until, args.author)
+        commits = collect_commits(args.repo, effective_since, args.until, args.author)
     except RuntimeError as e:
         print(f"commit-brief: {e}", file=sys.stderr)
         return 2
+
+    if args.since_last:
+        commits = state.commits_since_last(commits, args.repo)
 
     if args.json:
         print(json.dumps([c.__dict__ for c in commits], indent=2))
         return 0
 
     if not commits:
-        print(f"No commits since '{args.since}' in {args.repo}.")
+        if args.since_last:
+            print(f"No new commits since the last digest in {args.repo}.")
+        else:
+            print(f"No commits since '{args.since}' in {args.repo}.")
         return 0
 
-    provider = args.provider or "anthropic"
-    if provider not in PROVIDERS:
-        print(f"commit-brief: unknown provider '{provider}'", file=sys.stderr)
-        return 2
     api_key = args.api_key if args.dry_run else (
         args.api_key or ensure_api_key(provider, sys.stdin.isatty())
     )
@@ -423,6 +495,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     print(out)
+    if commits and not args.dry_run:
+        state.mark_digested(args.repo, commits[0].hash)
     return 0
 
 

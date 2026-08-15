@@ -1,5 +1,9 @@
 # commit-brief
 
+[![CI](https://github.com/ahm3d-karim/commit-brief/actions/workflows/ci.yml/badge.svg)](https://github.com/ahm3d-karim/commit-brief/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/commit-brief.svg)](https://pypi.org/project/commit-brief/)
+[![Python versions](https://img.shields.io/pypi/pyversions/commit-brief.svg)](https://pypi.org/project/commit-brief/)
+
 Turn yesterday's git log into a one-paragraph standup summary.
 
 `commit-brief` reads your git history (commit messages, authors, branch refs,
@@ -15,17 +19,23 @@ digest. One command, two interfaces:
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv) (or pipx).
 
 ```bash
-# global install, any machine — CLI only:
+# PyPI — CLI only (works once published):
+uv tool install commit-brief
+
+# with the MCP server (needs the mcp extra):
+uv tool install "commit-brief[mcp]"
+
+# Pre-publish fallback — install straight from GitHub:
 uv tool install git+https://github.com/ahm3d-karim/commit-brief
 
-# with the MCP server (needs the mcp dependency):
+# with the MCP server from git:
 uv tool install "git+https://github.com/ahm3d-karim/commit-brief[mcp]"
 
 # from a local checkout instead:
 uv tool install ".[mcp]"
 
-# pipx equivalent:
-pipx install "git+https://github.com/ahm3d-karim/commit-brief[mcp]"
+# pipx equivalent (from PyPI once published, or the git URL until then):
+pipx install "commit-brief[mcp]"
 ```
 
 Installs one command: `commit-brief`. Then set your API key:
@@ -57,6 +67,37 @@ commit-brief --json
 `--since`/`--until` accept anything git accepts: `yesterday`, `3 days ago`,
 `2026-08-01`. `--author` is repeatable (OR). Exit codes: 0 ok / no commits,
 2 git or API error.
+
+## Incremental digests
+
+Running `commit-brief` every day re-summarizes the same commits. `--since-last`
+digests only what is new since your last successful run (tracked per repo in
+`~/.commit-brief.json` — rebase/force-push safe: it falls back to the full
+window if the saved commit disappears):
+
+```bash
+commit-brief --since-last          # only new commits since the last digest
+commit-brief --since-last --bullets
+```
+
+Every successful digest advances the pointer, so plain `commit-brief` and
+`--since-last` cooperate. `--dry-run` and `--json` never touch the pointer.
+
+## Commit hygiene hook
+
+The digest is only as good as the commit messages it reads. Enforce
+[conventional commits](https://www.conventionalcommits.org) at the source:
+
+```bash
+commit-brief hook install          # write .git/hooks/commit-msg (this repo)
+commit-brief hook status           # installed? (safe — foreign hooks never touched)
+commit-brief hook check <file>     # validate a message file (exit 0/1)
+commit-brief hook uninstall        # remove only if commit-brief installed it
+```
+
+Rejects `feat:`, `fix:`, `feat(api):`, `fix!:`, `docs:` … anything that is not
+`type(scope)!: subject` (Merge/Revert/fixup!/squash!/amend! pass through), with
+a friendly reason on stderr. Per-repo, opt-in — your call whether you want it.
 
 ## Interactive menu + GitHub mode
 

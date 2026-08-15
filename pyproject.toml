@@ -1,9 +1,20 @@
 [project]
 name = "commit-brief"
-version = "0.11.0"
+version = "0.12.0"
 description = "Turn yesterday's git log into a one-paragraph standup summary"
 readme = "README.md"
 requires-python = ">=3.11"
+license = { file = "LICENSE" }
+keywords = ["git", "standup", "llm", "digest", "cli", "mcp"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Version Control :: Git",
+    "Intended Audience :: Developers",
+]
 dependencies = [
     "anthropic>=0.40",
 ]
@@ -16,6 +27,10 @@ commit-brief = "commit_brief.cli:main"
 # served over stdio is identical, so staying on 1.x keeps the server code simple.
 mcp = ["mcp>=1.2,<2"]
 test = ["pytest>=8"]
+
+[project.urls]
+Homepage = "https://github.com/ahm3d-karim/commit-brief"
+Repository = "https://github.com/ahm3d-karim/commit-brief"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

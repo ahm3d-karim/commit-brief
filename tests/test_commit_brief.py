@@ -391,7 +391,9 @@ def test_cli_provider_flags(monkeypatch, tmp_path, capsys):
                      "--provider", "deepseek", "--dry-run"]) == 0
     out = capsys.readouterr().out
     assert "flag path" in out
-    assert cli.main(["--provider", "bogus", "--dry-run"]) == 2
+    # unknown provider fails fast — hermetic: explicit --repo, no cwd dependence
+    assert cli.main(["--provider", "bogus", "--dry-run",
+                     "--repo", str(repo), "--since", "1 day ago"]) == 2
 
 
 def test_custom_provider_prompts_for_model_not_default(tmp_path, monkeypatch):
@@ -517,3 +519,81 @@ def test_help_lists_subcommands(capsys):
 def test_subcommand_parsing():
     assert cli.build_parser().parse_args(["mcp"]).command == "mcp"
     assert cli.build_parser().parse_args(["mcp-test", "some/repo"]).command == "mcp-test"
+
+
+# ---- incremental digest (--since-last) + digest state (Wave 2) -------------
+
+
+def test_since_last_first_run(tmp_path, monkeypatch, capsys):
+    """First --since-last run: full window digested, state NOT marked (dry-run)."""
+    from commit_brief import bootstrap as bs
+    from commit_brief import state
+
+    cfg = tmp_path / "cfg.json"
+    monkeypatch.setattr(bs, "CONFIG_PATH", cfg)
+    repo = make_repo(tmp_path, [("Alice", "feat: first", None)])
+    assert cli.main(["--repo", repo, "--since-last", "--dry-run"]) == 0
+    assert "feat: first" in capsys.readouterr().out
+    assert state.last_digested_sha(repo) is None  # dry-run must not mark
+
+
+def test_since_last_incremental(tmp_path, monkeypatch, capsys):
+    """After a marked digest, only commits newer than it are digested."""
+    from commit_brief import bootstrap as bs
+    from commit_brief import state
+
+    cfg = tmp_path / "cfg.json"
+    monkeypatch.setattr(bs, "CONFIG_PATH", cfg)
+    repo = make_repo(tmp_path, [("Alice", "feat: first", None)])
+    hash_a = subprocess.run(
+        ["git", "-C", repo, "rev-parse", "--short", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    state.mark_digested(repo, hash_a)
+    subprocess.run(
+        ["git", "-C", repo, "commit", "--allow-empty", "-m", "feat: second"],
+        check=True, capture_output=True, text=True,
+        stdin=subprocess.DEVNULL, env={**os.environ, "GIT_PAGER": "cat"},
+    )
+    assert cli.main(["--repo", repo, "--since-last", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "feat: second" in out
+    assert "feat: first" not in out
+
+
+def test_digest_marks_state(tmp_path, monkeypatch):
+    """A successful (non-dry-run) digest records the newest commit's sha."""
+    from commit_brief import bootstrap as bs
+    from commit_brief import state
+
+    cfg = tmp_path / "cfg.json"
+    monkeypatch.setattr(bs, "CONFIG_PATH", cfg)
+    repo = make_repo(tmp_path, [("Alice", "feat: x", None)])
+    monkeypatch.setattr(cli, "llm_summarize", lambda *a, **k: "digest ok")
+    assert cli.main(["--repo", repo]) == 0
+    head = subprocess.run(
+        ["git", "-C", repo, "rev-parse", "--short", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert state.last_digested_sha(repo) == head
+
+
+# ---- commit-msg hook subcommand (Wave 2) ------------------------------------
+
+
+def test_hook_subcommands(tmp_path, capsys):
+    """hook install/check/status/uninstall lifecycle end to end."""
+    from commit_brief import hooks
+
+    repo = make_repo(tmp_path, [("Alice", "feat: x", None)])
+    assert cli.main(["hook", "install", "--repo", repo]) == 0
+    assert hooks.hook_installed(repo) is True
+    good = tmp_path / "good.txt"
+    good.write_text("feat: good", encoding="utf-8")
+    bad = tmp_path / "bad.txt"
+    bad.write_text("no colon here", encoding="utf-8")
+    assert cli.main(["hook", "check", str(good), "--repo", repo]) == 0
+    assert cli.main(["hook", "check", str(bad), "--repo", repo]) == 1
+    assert cli.main(["hook", "status", "--repo", repo]) == 0
+    assert cli.main(["hook", "uninstall", "--repo", repo]) == 0
+    assert hooks.hook_installed(repo) is False
